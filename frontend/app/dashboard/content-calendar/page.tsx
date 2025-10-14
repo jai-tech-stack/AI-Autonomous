@@ -19,6 +19,7 @@ import {
   ChevronLeft,
   ChevronRight
 } from 'lucide-react';
+import { apiClient } from '@/lib/api';
 
 interface User {
   id: string;
@@ -52,6 +53,7 @@ export default function ContentCalendarPage() {
     content: '',
     scheduledFor: ''
   });
+  const [suggestions, setSuggestions] = useState<any[]>([]);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -160,6 +162,32 @@ export default function ContentCalendarPage() {
     } catch (error) {
       console.error('Error creating post:', error);
       toast.error('Failed to create post');
+    }
+  };
+
+  const suggestTimes = async () => {
+    if (!user?.organizationId) return;
+    const res = await apiClient.suggestSchedule({ organizationId: user.organizationId, platform: newPost.platform, days: 7 });
+    if (res.success) {
+      setSuggestions((res.data as any).suggestions || []);
+      toast.success('Suggested times ready');
+    }
+  };
+
+  const scheduleAt = async (iso: string) => {
+    if (!user?.organizationId) return;
+    const res = await apiClient.schedulePost({
+      organizationId: user.organizationId,
+      platform: newPost.platform,
+      content: { text: newPost.content },
+      scheduledFor: iso,
+    });
+    if (res.success) {
+      toast.success('Scheduled');
+      setSuggestions([]);
+      await fetchPosts(user.organizationId);
+    } else {
+      toast.error((res as any).error || 'Failed to schedule');
     }
   };
 
@@ -466,6 +494,19 @@ export default function ContentCalendarPage() {
                     onChange={(e) => setNewPost({...newPost, scheduledFor: e.target.value})}
                     className="w-full px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                   />
+                  <div className="mt-3 flex items-center gap-2">
+                    <button onClick={suggestTimes} className="px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg text-sm">Suggest optimal times</button>
+                  </div>
+                  {suggestions.length > 0 && (
+                    <div className="mt-3 space-y-2 max-h-40 overflow-y-auto">
+                      {suggestions.map((s) => (
+                        <div key={s.dateTime} className="flex items-center justify-between bg-white/5 border border-white/10 rounded p-2 text-white text-sm">
+                          <span>{new Date(s.dateTime).toLocaleString()} • score {(s.score * 100).toFixed(0)}%</span>
+                          <button onClick={() => scheduleAt(s.dateTime)} className="px-2 py-1 bg-purple-600 hover:bg-purple-700 rounded text-xs">Schedule</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="flex gap-3 mt-6">

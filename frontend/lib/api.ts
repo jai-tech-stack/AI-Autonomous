@@ -43,7 +43,7 @@ class ApiClient {
     };
 
     if (this.token) {
-      headers.Authorization = `Bearer ${this.token}`;
+      (headers as Record<string, string>)['Authorization'] = `Bearer ${this.token}`;
     }
 
     try {
@@ -326,6 +326,89 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(checkoutData),
     });
+  }
+
+  // Teams
+  async listMembers(organizationId: string) {
+    return this.request(`/api/teams/members/${organizationId}`);
+  }
+
+  async inviteMember(data: { organizationId: string; email: string; role?: 'member' | 'admin' }) {
+    return this.request('/api/teams/invite', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async changeMemberRole(data: { organizationId: string; userId: string; role: 'member' | 'admin' | 'owner' }) {
+    return this.request('/api/teams/role', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async removeMember(data: { organizationId: string; userId: string }) {
+    return this.request('/api/teams/remove', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  // Activity logs
+  async createActivity(data: { organizationId: string; title: string; description?: string; type?: string; leadId?: string }) {
+    return this.request('/api/activity', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async getActivities(organizationId: string) {
+    return this.request(`/api/activity/${organizationId}`);
+  }
+
+  // Comments
+  async addTaskComment(data: { taskId: string; comment: string }) {
+    return this.request('/api/comments/task', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async getTaskComments(taskId: string) {
+    return this.request(`/api/comments/task/${taskId}`);
+  }
+
+  async addPostComment(data: { postId: string; comment: string }) {
+    return this.request('/api/comments/post', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async getPostComments(postId: string) {
+    return this.request(`/api/comments/post/${postId}`);
+  }
+
+  // Email send (Nodemailer)
+  async sendEmail(data: { to: string; subject: string; html?: string; text?: string }) {
+    return this.request('/api/email/send', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  // AI media
+  async transcribeWhisper(data: { audioUrl: string; hint?: string }) {
+    return this.request('/api/ai/whisper/transcribe', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async generateDalle(data: { prompt: string; size?: string }) {
+    return this.request('/api/ai/dalle/generate', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  // Referrals
+  async getOrCreateReferralCode(data: { organizationId: string }) {
+    return this.request('/api/referrals/code', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async getReferralStats(organizationId: string) {
+    return this.request(`/api/referrals/${organizationId}`);
+  }
+
+  async trackReferral(data: { code: string; event?: 'click' | 'signup'; email?: string }) {
+    return this.request('/api/referrals/track', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  // Scheduler
+  async suggestSchedule(data: { organizationId: string; platform?: string; days?: number }) {
+    return this.request('/api/scheduler/suggest', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async schedulePost(data: { organizationId: string; platform: string; content: any; scheduledFor: string; campaignId?: string }) {
+    return this.request('/api/scheduler/schedule-post', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async bulkSchedule(data: { organizationId: string; posts: Array<{ platform: string; content: any; scheduledFor: string; campaignId?: string }> }) {
+    return this.request('/api/scheduler/bulk-schedule', { method: 'POST', body: JSON.stringify(data) });
   }
 }
 
