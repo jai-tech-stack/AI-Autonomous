@@ -61,7 +61,7 @@ export default function AvatarAI({ organizationId, aiConfig, onMessage, onVoiceR
   const initializeAvatar = async () => {
     try {
       // Generate avatar using D-ID API or similar service
-      const response = await fetch('/api/avatar/generate', {
+      const response = await fetch('http://localhost:5000/api/avatar/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -84,7 +84,7 @@ export default function AvatarAI({ organizationId, aiConfig, onMessage, onVoiceR
         // Fallback to static avatar or demo
         setAvatarVideo('/api/placeholder-avatar');
         setIsConnected(true);
-        toast.info('Using demo avatar - connect D-ID for full experience');
+        toast('Using demo avatar - connect D-ID for full experience');
       }
     } catch (error) {
       console.error('Avatar initialization error:', error);
@@ -185,7 +185,7 @@ export default function AvatarAI({ organizationId, aiConfig, onMessage, onVoiceR
 
   const generateAvatarResponse = async (text: string) => {
     try {
-      const response = await fetch('/api/avatar/speak', {
+      const response = await fetch('http://localhost:5000/api/avatar/speak', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

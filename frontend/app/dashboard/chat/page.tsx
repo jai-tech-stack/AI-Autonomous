@@ -61,11 +61,10 @@ export default function ChatPage() {
 
   const fetchAIConfig = async (organizationId: string) => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:5000/api/ai-ceo/config/${organizationId}`, {
+      const response = await fetch(`http://localhost:5000/api/onboarding/ai-ceo/${organizationId}`, {
         headers: {
-          'Authorization': `Bearer ${token}`,
-        },
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
       });
 
       if (response.ok) {
@@ -152,7 +151,7 @@ export default function ChatPage() {
             {user?.organizationId && (
               <AvatarAI
                 organizationId={user.organizationId}
-                aiConfig={aiConfig}
+                aiConfig={aiConfig ?? undefined}
                 onMessage={handleMessage}
                 onVoiceResponse={handleVoiceResponse}
               />

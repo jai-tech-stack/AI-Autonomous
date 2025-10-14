@@ -1,2 +1,4 @@
 /New folder/
 node_modules/
+# .gitignore
+backend/.env
