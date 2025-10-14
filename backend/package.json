@@ -24,7 +24,9 @@
     "jsonwebtoken": "^9.0.2",
     "linkedin-api": "^0.0.1",
     "node-cron": "^4.2.1",
-    "nodemailer": "^7.0.9"
+    "nodemailer": "^7.0.9",
+    "openai": "^6.3.0",
+    "stripe": "^19.1.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

@@ -2021,6 +2021,381 @@ app.post('/api/ai/whisper/transcribe', authMiddleware, orgGuard('member'), enfor
   }
 });
 
+// ==================== AVATAR AI ROUTES ====================
+
+// Generate AI CEO Avatar
+app.post('/api/avatar/generate', authMiddleware, orgGuard('member'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId, ceoName, personality, industry } = req.body;
+
+    if (!organizationId) {
+      return res.status(400).json({ error: 'Organization ID required' });
+    }
+
+    // Get AI CEO config
+    const aiConfig = await prisma.aiCeoConfig.findUnique({
+      where: { organizationId },
+    });
+
+    if (!aiConfig) {
+      return res.status(404).json({ error: 'AI CEO configuration not found' });
+    }
+
+    // For now, return a placeholder avatar URL
+    // In production, integrate with D-ID, Soul Machines, or similar service
+    const avatarUrl = process.env.DID_API_KEY 
+      ? await generateDIDAvatar(aiConfig)
+      : '/api/placeholder-avatar';
+
+    res.json({ 
+      success: true, 
+      avatarUrl,
+      ceoName: aiConfig.ceoName,
+      personality: aiConfig.personality
+    });
+  } catch (error) {
+    console.error('Avatar generation error:', error);
+    res.status(500).json({ error: 'Failed to generate avatar' });
+  }
+});
+
+// Generate avatar speaking video
+app.post('/api/avatar/speak', authMiddleware, orgGuard('member'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId, text, emotion } = req.body;
+
+    if (!organizationId || !text) {
+      return res.status(400).json({ error: 'Organization ID and text required' });
+    }
+
+    // For now, return a placeholder video URL
+    // In production, integrate with D-ID or similar service for lip-sync
+    const videoUrl = process.env.DID_API_KEY 
+      ? await generateDIDSpeakingVideo(text, emotion)
+      : '/api/placeholder-avatar-speaking';
+
+    res.json({ 
+      success: true, 
+      videoUrl,
+      duration: text.length * 0.1 // Estimate duration
+    });
+  } catch (error) {
+    console.error('Avatar speaking error:', error);
+    res.status(500).json({ error: 'Failed to generate speaking video' });
+  }
+});
+
+// Placeholder avatar endpoint
+app.get('/api/placeholder-avatar', (req, res) => {
+  // Return a simple animated avatar or static image
+  res.redirect('https://via.placeholder.com/400x400/8B5CF6/FFFFFF?text=AI+CEO');
+});
+
+// Placeholder speaking avatar endpoint
+app.get('/api/placeholder-avatar-speaking', (req, res) => {
+  // Return a simple animated speaking avatar
+  res.redirect('https://via.placeholder.com/400x400/8B5CF6/FFFFFF?text=Speaking...');
+});
+
+// Helper function to generate D-ID avatar (placeholder)
+async function generateDIDAvatar(aiConfig: any): Promise<string> {
+  // This would integrate with D-ID API
+  // For now, return a placeholder
+  return '/api/placeholder-avatar';
+}
+
+// Helper function to generate D-ID speaking video (placeholder)
+async function generateDIDSpeakingVideo(text: string, emotion: string): Promise<string> {
+  // This would integrate with D-ID API for lip-sync
+  // For now, return a placeholder
+  return '/api/placeholder-avatar-speaking';
+}
+
+// ==================== EMOTION DETECTION & SENTIMENT ANALYSIS ROUTES ====================
+
+// Detect emotion from image
+app.post('/api/ai/emotion/detect', authMiddleware, orgGuard('member'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { imageData, timestamp } = req.body;
+
+    if (!imageData) {
+      return res.status(400).json({ error: 'Image data required' });
+    }
+
+    // For now, return mock emotion detection
+    // In production, integrate with Azure Face API, AWS Rekognition, or similar
+    const emotions = ['happy', 'neutral', 'confident', 'thoughtful', 'excited', 'sad'];
+    const randomEmotion = emotions[Math.floor(Math.random() * emotions.length)];
+    const confidence = Math.random() * 0.4 + 0.6; // 0.6-1.0
+
+    res.json({
+      success: true,
+      emotion: randomEmotion,
+      confidence,
+      facialExpression: randomEmotion === 'happy' ? 'smile' : 'neutral',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Emotion detection error:', error);
+    res.status(500).json({ error: 'Failed to detect emotion' });
+  }
+});
+
+// Analyze sentiment from text
+app.post('/api/ai/sentiment/analyze', authMiddleware, orgGuard('member'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { text } = req.body;
+
+    if (!text) {
+      return res.status(400).json({ error: 'Text required' });
+    }
+
+    // Simple sentiment analysis (in production, use Azure Text Analytics, AWS Comprehend, etc.)
+    const sentiment = analyzeTextSentiment(text);
+    
+    res.json({
+      success: true,
+      sentiment: sentiment.sentiment,
+      sentimentScore: sentiment.score,
+      confidence: sentiment.confidence,
+      emotion: sentiment.emotion,
+      voiceTone: sentiment.voiceTone,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Sentiment analysis error:', error);
+    res.status(500).json({ error: 'Failed to analyze sentiment' });
+  }
+});
+
+// Helper function for text sentiment analysis
+function analyzeTextSentiment(text: string) {
+  const positiveWords = [
+    'good', 'great', 'excellent', 'amazing', 'wonderful', 'fantastic', 'love', 'happy', 'excited',
+    'awesome', 'brilliant', 'perfect', 'outstanding', 'superb', 'marvelous', 'delighted', 'thrilled'
+  ];
+  
+  const negativeWords = [
+    'bad', 'terrible', 'awful', 'hate', 'angry', 'frustrated', 'sad', 'disappointed', 'worried',
+    'horrible', 'disgusting', 'annoying', 'frustrating', 'upset', 'concerned', 'stressed', 'anxious'
+  ];
+  
+  const confidentWords = [
+    'confident', 'sure', 'certain', 'definitely', 'absolutely', 'guaranteed', 'proven', 'established'
+  ];
+  
+  const thoughtfulWords = [
+    'think', 'consider', 'analyze', 'evaluate', 'reflect', 'contemplate', 'ponder', 'examine'
+  ];
+
+  const words = text.toLowerCase().split(/\s+/);
+  let positiveCount = 0;
+  let negativeCount = 0;
+  let confidentCount = 0;
+  let thoughtfulCount = 0;
+  
+  words.forEach(word => {
+    if (positiveWords.includes(word)) positiveCount++;
+    if (negativeWords.includes(word)) negativeCount++;
+    if (confidentWords.includes(word)) confidentCount++;
+    if (thoughtfulWords.includes(word)) thoughtfulCount++;
+  });
+  
+  const total = positiveCount + negativeCount;
+  const score = total === 0 ? 0 : (positiveCount - negativeCount) / total;
+  
+  let sentiment: 'positive' | 'negative' | 'neutral';
+  if (score > 0.1) sentiment = 'positive';
+  else if (score < -0.1) sentiment = 'negative';
+  else sentiment = 'neutral';
+  
+  let emotion = 'neutral';
+  if (confidentCount > 0) emotion = 'confident';
+  else if (thoughtfulCount > 0) emotion = 'thoughtful';
+  else if (positiveCount > negativeCount) emotion = 'happy';
+  else if (negativeCount > positiveCount) emotion = 'sad';
+  
+  let voiceTone = 'neutral';
+  if (sentiment === 'positive') voiceTone = 'cheerful';
+  else if (sentiment === 'negative') voiceTone = 'concerned';
+  else if (emotion === 'confident') voiceTone = 'assertive';
+  else if (emotion === 'thoughtful') voiceTone = 'calm';
+  
+  return {
+    sentiment,
+    score,
+    confidence: Math.min(0.9, Math.abs(score) + 0.5),
+    emotion,
+    voiceTone
+  };
+}
+
+// ==================== NEURAL NETWORK ROUTES ====================
+
+// Initialize neural network
+app.post('/api/neural-network/initialize', authMiddleware, orgGuard('member'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId } = req.body;
+
+    if (!organizationId) {
+      return res.status(400).json({ error: 'Organization ID required' });
+    }
+
+    // Initialize neural network state
+    const networkState = {
+      memorySize: 0,
+      patternsDetected: 0,
+      predictionsMade: 0,
+      accuracy: 0.75,
+      initializedAt: new Date().toISOString()
+    };
+
+    res.json({
+      success: true,
+      ...networkState
+    });
+  } catch (error) {
+    console.error('Neural network initialization error:', error);
+    res.status(500).json({ error: 'Failed to initialize neural network' });
+  }
+});
+
+// Learn from data
+app.get('/api/neural-network/learn/:organizationId', authMiddleware, orgGuard('member'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId } = req.params;
+
+    // Fetch recent data for learning
+    const recentMessages = await prisma.chatMessage.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+
+    const recentTasks = await prisma.autonomousTask.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+
+    const recentLeads = await prisma.salesLead.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+      take: 30,
+    });
+
+    // Process learning data
+    const learningData = [
+      ...recentMessages.map(msg => ({
+        type: 'conversation',
+        content: { text: msg.content, role: msg.role },
+        timestamp: msg.createdAt.toISOString(),
+        confidence: 0.8,
+        context: 'chat'
+      })),
+      ...recentTasks.map(task => ({
+        type: 'decision',
+        content: { taskType: task.taskType, status: task.status, input: task.input },
+        timestamp: task.createdAt.toISOString(),
+        confidence: 0.9,
+        context: 'autonomous'
+      })),
+      ...recentLeads.map(lead => ({
+        type: 'outcome',
+        content: { 
+          success: lead.status === 'converted',
+          score: lead.score,
+          company: lead.company,
+          industry: (lead.metadata && typeof lead.metadata === 'object' && 'industry' in lead.metadata)
+            ? (lead.metadata as any).industry
+            : null
+        },
+        timestamp: lead.createdAt.toISOString(),
+        confidence: 0.7,
+        context: 'sales'
+      }))
+    ];
+
+    // Calculate current metrics
+    const memorySize = learningData.length;
+    const patternsDetected = Math.floor(memorySize / 10); // Simulate pattern detection
+    const predictionsMade = Math.floor(memorySize / 5); // Simulate predictions
+    const accuracy = Math.min(0.95, 0.75 + (memorySize / 1000)); // Improve with more data
+
+    res.json({
+      success: true,
+      learningData,
+      memorySize,
+      patternsDetected,
+      predictionsMade,
+      accuracy,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Neural network learning error:', error);
+    res.status(500).json({ error: 'Failed to process learning data' });
+  }
+});
+
+// Generate prediction
+app.post('/api/neural-network/predict', authMiddleware, orgGuard('member'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId } = req.body;
+
+    if (!organizationId) {
+      return res.status(400).json({ error: 'Organization ID required' });
+    }
+
+    // Generate mock prediction based on recent data
+    const recentTasks = await prisma.autonomousTask.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+    });
+
+    const recentLeads = await prisma.salesLead.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+    });
+
+    // Simple prediction logic
+    const taskSuccessRate = recentTasks.filter(t => t.status === 'COMPLETED').length / Math.max(recentTasks.length, 1);
+    const leadConversionRate = recentLeads.filter(l => l.status === 'converted').length / Math.max(recentLeads.length, 1);
+
+    const predictions = [
+      {
+        type: 'task_completion',
+        prediction: taskSuccessRate > 0.8 ? 'High success rate expected for new tasks' : 'Consider optimizing task execution',
+        confidence: 0.85,
+        impact: 'medium'
+      },
+      {
+        type: 'lead_conversion',
+        prediction: leadConversionRate > 0.3 ? 'Strong conversion potential' : 'Focus on lead qualification',
+        confidence: 0.78,
+        impact: 'high'
+      },
+      {
+        type: 'resource_optimization',
+        prediction: 'Consider automating routine tasks to improve efficiency',
+        confidence: 0.92,
+        impact: 'high'
+      }
+    ];
+
+    res.json({
+      success: true,
+      predictions,
+      confidence: 0.85,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Neural network prediction error:', error);
+    res.status(500).json({ error: 'Failed to generate prediction' });
+  }
+});
+
 // ==================== REFERRAL PROGRAM ROUTES (scaffold via Integration) ====================
 
 // Create or get referral code for org
