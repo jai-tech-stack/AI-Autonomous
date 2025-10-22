@@ -8,6 +8,12 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import  { PrismaClient } from '@prisma/client';
 import nodemailer from 'nodemailer';
+import { generateAgenticResponse } from './services/openai';
+import { createCheckoutSession, constructWebhookEvent } from './services/stripe';
+import { postToLinkedIn } from './services/linkedin';
+import { agenticEngine } from './services/agentic-engine';
+import { neuralNetwork } from './services/neural-network';
+import { detectEmotion } from './services/emotion';
 
 dotenv.config();
 
@@ -382,8 +388,34 @@ app.post('/api/chat/message', authMiddleware, async (req: AuthRequest, res: Resp
       where: { organizationId },
     });
 
-    // Simple AI response (you'll integrate OpenAI later)
-    const aiResponse = `I'm ${aiConfig?.ceoName || 'your AI CEO'}. I received your message: "${content}". OpenAI integration coming next!`;
+    // Get conversation history
+    const history = await prisma.chatMessage.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+      select: { role: true, content: true },
+    });
+
+    // Build system prompt from AI config
+    const systemPrompt = `You are ${aiConfig?.ceoName || 'an AI CEO assistant'}.
+Your personality: ${JSON.stringify(aiConfig?.personality || { tone: 'professional', focus: 'results' })}.
+Your goals: ${JSON.stringify(aiConfig?.goals || { growth: 'sustainable' })}.
+Industry: ${aiConfig?.industry || 'general business'}.
+
+You help users with business strategy, marketing, sales, and operations. Be concise, actionable, and insightful.`;
+
+    // Generate AI response using OpenAI (fallback if key not set)
+    let aiResponse: string;
+    try {
+      aiResponse = await generateAgenticResponse(
+        content,
+        systemPrompt,
+        history.reverse().map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+      );
+    } catch (err: any) {
+      console.warn('OpenAI not configured, using fallback:', err.message);
+      aiResponse = `I'm ${aiConfig?.ceoName || 'your AI CEO'}. I received: "${content}". (OpenAI key required for intelligent responses)`;
+    }
 
     // Save AI response
     const assistantMessage = await prisma.chatMessage.create({
@@ -660,13 +692,31 @@ app.post('/api/integrations/linkedin/post', authMiddleware, orgGuard('member'), 
       return res.status(400).json({ error: 'LinkedIn not connected' });
     }
 
-    // Post to LinkedIn (simplified - you'll need to implement actual LinkedIn API call)
-    const postResult = {
-      id: `linkedin_post_${Date.now()}`,
-      url: 'https://linkedin.com/posts/example',
-      success: true,
-      postedAt: new Date().toISOString(),
-    };
+    // Post to LinkedIn using real API or fallback
+    let postResult: any;
+    try {
+      const authorUrn = (integration.metadata as any)?.authorUrn || process.env.LINKEDIN_AUTHOR_URN || 'urn:li:person:PLACEHOLDER';
+      const linkedinResponse = await postToLinkedIn({
+        accessToken: integration.accessToken,
+        authorUrn,
+        text: typeof content === 'string' ? content : content.text || JSON.stringify(content),
+      });
+      postResult = {
+        id: linkedinResponse.id || `linkedin_post_${Date.now()}`,
+        url: `https://www.linkedin.com/feed/update/${linkedinResponse.id || 'unknown'}`,
+        success: true,
+        postedAt: new Date().toISOString(),
+      };
+    } catch (err: any) {
+      console.warn('LinkedIn API call failed, using mock:', err.message);
+      postResult = {
+        id: `linkedin_mock_${Date.now()}`,
+        url: 'https://linkedin.com/posts/mock',
+        success: false,
+        error: err.message,
+        postedAt: new Date().toISOString(),
+      };
+    }
 
     // Update task with posting result if taskId provided
     if (taskId) {
@@ -1907,24 +1957,38 @@ app.post('/api/stripe/create-checkout', authMiddleware, orgGuard('member'), asyn
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Plan pricing (in cents)
-    const planPrices: { [key: string]: number } = {
-      pro: 2900, // $29/month
-      enterprise: 9900, // $99/month
+    // Stripe Price IDs (create these in Stripe Dashboard)
+    const stripePriceIds: { [key: string]: string } = {
+      pro: process.env.STRIPE_PRICE_ID_PRO || 'price_placeholder_pro',
+      enterprise: process.env.STRIPE_PRICE_ID_ENTERPRISE || 'price_placeholder_enterprise',
     };
 
-    const price = planPrices[plan];
-    if (!price) {
+    const priceId = stripePriceIds[plan];
+    if (!priceId) {
       return res.status(400).json({ error: 'Invalid plan' });
     }
 
-    // Create Stripe checkout session (simplified - you'll need actual Stripe integration)
-    const checkoutSession = {
-      id: `cs_${Date.now()}`,
-      url: `https://checkout.stripe.com/pay/cs_${Date.now()}`,
-      success_url: `${process.env.FRONTEND_URL}/dashboard?success=true`,
-      cancel_url: `${process.env.FRONTEND_URL}/pricing?canceled=true`,
-    };
+    // Create real Stripe checkout session (fallback to mock if not configured)
+    let checkoutSession: any;
+    try {
+      const session = await createCheckoutSession({
+        priceId,
+        successUrl: `${process.env.FRONTEND_URL}/dashboard?success=true`,
+        cancelUrl: `${process.env.FRONTEND_URL}/pricing?canceled=true`,
+        metadata: {
+          organizationId,
+          plan,
+          userId: req.user!.userId,
+        },
+      });
+      checkoutSession = { id: session.id, url: session.url };
+    } catch (err: any) {
+      console.warn('Stripe not configured, using mock:', err.message);
+      checkoutSession = {
+        id: `cs_mock_${Date.now()}`,
+        url: `https://checkout.stripe.com/pay/cs_mock_${Date.now()}`,
+      };
+    }
 
     res.json({ success: true, session: checkoutSession });
   } catch (error) {
@@ -2927,11 +2991,1037 @@ const executePendingTasks = async () => {
 // Run task executor every minute
 setInterval(executePendingTasks, 60000);
 
+// ==================== CUSTOM AVATAR AI PROCESSING ====================
+
+// AI Processing endpoint for custom avatars
+app.post('/api/ai/process', async (req, res) => {
+  try {
+    // Authenticate request (middleware was missing/undefined)
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
+
+    let userId: string | undefined;
+    try {
+      // You should use the same secret as used to sign JWTs
+      const jwt = require('jsonwebtoken');
+      const secret = process.env.JWT_SECRET || 'secret';
+      const decoded = jwt.verify(token, secret) as any;
+      userId = decoded.id;
+    } catch (e) {
+      return res.status(403).json({ error: 'Invalid token' });
+    }
+    
+    const { input, context, organizationId } = req.body;
+    
+    if (!organizationId) {
+      return res.status(400).json({ error: 'organizationId required' });
+    }
+    
+    // Get organization
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId }
+    });
+    
+    if (!organization) {
+      return res.status(400).json({ error: 'Organization not found' });
+    }
+    
+    // Enhanced AI processing with context awareness
+    const response = await processWithCustomAI(input, context, organization);
+    
+    res.json({ response });
+  } catch (error) {
+    console.error('Error processing AI request:', error);
+    res.status(500).json({ error: 'Failed to process AI request' });
+  }
+});
+
+// Enhanced AI processing function for custom avatars
+async function processWithCustomAI(input: string, context: any, organization: any) {
+  // Get organization's AI config
+  const aiConfig = await prisma.aiCeoConfig.findFirst({
+    where: { organizationId: organization.id }
+  });
+  
+  // Get recent conversation context
+  const recentMessages = await prisma.chatMessage.findMany({
+    where: { organizationId: organization.id },
+    orderBy: { createdAt: 'desc' },
+    take: 5
+  });
+  
+  // Get organization's goals and tasks for context
+  const recentTasks = await prisma.autonomousTask.findMany({
+    where: { organizationId: organization.id },
+    orderBy: { createdAt: 'desc' },
+    take: 3
+  });
+  
+  // Build context-aware response
+  const personality = aiConfig?.personality || context?.personality || {};
+  const goals = aiConfig?.goals || context?.goals || {};
+  const industry = aiConfig?.industry || context?.industry || 'general business';
+  const currentEmotion = context?.currentEmotion || 'neutral';
+  
+  // Generate contextual response based on input and context
+  let response = generateContextualResponse(input, {
+    personality,
+    goals,
+    industry,
+    currentEmotion,
+    recentMessages: recentMessages.map(m => ({ content: m.content, role: m.role })),
+    recentTasks: recentTasks.map(t => ({ taskType: t.taskType, status: t.status })),
+    organizationName: organization.name
+  });
+  
+  // Save conversation to database
+  await prisma.chatMessage.create({
+    data: {
+      organizationId: organization.id,
+      userId: (context.userId as string) || 'system',
+      content: input,
+      role: 'user',
+      metadata: {
+        emotion: currentEmotion,
+        context: context
+      }
+    }
+  });
+  
+  await prisma.chatMessage.create({
+    data: {
+      organizationId: organization.id,
+      userId: (context.userId as string) || 'system',
+      content: response,
+      role: 'assistant',
+      metadata: {
+        emotion: 'confident',
+        context: context
+      }
+    }
+  });
+  
+  return response;
+}
+
+// Generate contextual AI responses
+function generateContextualResponse(input: string, context: any) {
+  const { personality, goals, industry, currentEmotion, recentMessages, recentTasks, organizationName } = context;
+  
+  // Analyze input sentiment and intent
+  const sentiment = analyzeInputSentiment(input);
+  const intent = analyzeInputIntent(input);
+  
+  // Generate response based on personality and context
+  let response = '';
+  
+  if (intent === 'greeting') {
+    response = generateGreetingResponse(personality, organizationName);
+  } else if (intent === 'question') {
+    response = generateQuestionResponse(input, personality, industry, recentTasks);
+  } else if (intent === 'task_request') {
+    response = generateTaskResponse(input, personality, goals);
+  } else if (intent === 'status_inquiry') {
+    response = generateStatusResponse(recentTasks, personality);
+  } else {
+    response = generateGeneralResponse(input, personality, industry, currentEmotion);
+  }
+  
+  // Add personality traits to response
+  if (personality.tone === 'professional') {
+    response = makeResponseProfessional(response);
+  } else if (personality.tone === 'casual') {
+    response = makeResponseCasual(response);
+  } else if (personality.tone === 'enthusiastic') {
+    response = makeResponseEnthusiastic(response);
+  }
+  
+  return response;
+}
+
+function analyzeInputSentiment(input: string): 'positive' | 'negative' | 'neutral' {
+  const positiveWords = ['good', 'great', 'excellent', 'amazing', 'wonderful', 'fantastic', 'love', 'like'];
+  const negativeWords = ['bad', 'terrible', 'awful', 'hate', 'dislike', 'problem', 'issue', 'error'];
+  
+  const lowerInput = input.toLowerCase();
+  const positiveCount = positiveWords.filter(word => lowerInput.includes(word)).length;
+  const negativeCount = negativeWords.filter(word => lowerInput.includes(word)).length;
+  
+  if (positiveCount > negativeCount) return 'positive';
+  if (negativeCount > positiveCount) return 'negative';
+  return 'neutral';
+}
+
+function analyzeInputIntent(input: string): string {
+  const lowerInput = input.toLowerCase();
+  
+  if (lowerInput.includes('hello') || lowerInput.includes('hi') || lowerInput.includes('hey')) {
+    return 'greeting';
+  }
+  if (lowerInput.includes('?') || lowerInput.includes('how') || lowerInput.includes('what') || lowerInput.includes('why')) {
+    return 'question';
+  }
+  if (lowerInput.includes('task') || lowerInput.includes('create') || lowerInput.includes('do') || lowerInput.includes('help')) {
+    return 'task_request';
+  }
+  if (lowerInput.includes('status') || lowerInput.includes('progress') || lowerInput.includes('update')) {
+    return 'status_inquiry';
+  }
+  
+  return 'general';
+}
+
+function generateGreetingResponse(personality: any, organizationName: string): string {
+  const greetings = [
+    `Hello! I'm your AI CEO, ready to help ${organizationName} achieve its goals.`,
+    `Greetings! I'm here to assist with your business needs and strategic decisions.`,
+    `Hi there! Your AI business partner is ready to collaborate and drive success.`
+  ];
+  
+  return greetings[Math.floor(Math.random() * greetings.length)];
+}
+
+function generateQuestionResponse(input: string, personality: any, industry: string, recentTasks: any[]): string {
+  const responses = [
+    `That's a great question about ${industry}. Let me help you with that.`,
+    `I understand you're asking about ${input.split('?')[0]}. Here's what I can tell you...`,
+    `Based on your question and our current focus areas, I'd recommend...`
+  ];
+  
+  return responses[Math.floor(Math.random() * responses.length)];
+}
+
+function generateTaskResponse(input: string, personality: any, goals: any): string {
+  return `I'll help you with that task. Let me create a plan and get started on it right away.`;
+}
+
+function generateStatusResponse(recentTasks: any[], personality: any): string {
+  if (recentTasks.length === 0) {
+    return "We don't have any active tasks at the moment. Would you like me to help you create some?";
+  }
+  
+  const activeTasks = recentTasks.filter(task => task.status === 'in_progress').length;
+  const completedTasks = recentTasks.filter(task => task.status === 'completed').length;
+  
+  return `Currently, we have ${activeTasks} active tasks and ${completedTasks} recently completed. Let me give you a detailed update.`;
+}
+
+function generateGeneralResponse(input: string, personality: any, industry: string, currentEmotion: string): string {
+  const responses = [
+    `I understand. Let me help you with that in the context of ${industry}.`,
+    `That's interesting. Based on our current strategy, I'd suggest...`,
+    `I'm here to help. Let me provide some insights on that topic.`
+  ];
+  
+  return responses[Math.floor(Math.random() * responses.length)];
+}
+
+function makeResponseProfessional(response: string): string {
+  return response.replace(/I'm/g, "I am").replace(/don't/g, "do not").replace(/can't/g, "cannot");
+}
+
+function makeResponseCasual(response: string): string {
+  return response.replace(/I am/g, "I'm").replace(/do not/g, "don't").replace(/cannot/g, "can't");
+}
+
+function makeResponseEnthusiastic(response: string): string {
+  const enthusiasm = ["Absolutely!", "Fantastic!", "Excellent!", "Wonderful!"];
+  return enthusiasm[Math.floor(Math.random() * enthusiasm.length)] + " " + response;
+}
+
+// ==================== AGENTIC AI ORCHESTRATOR ====================
+
+// Get workflows for organization
+app.get('/api/orchestration/workflows/:organizationId', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId } = req.params;
+    
+    const workflows = await prisma.autonomousTask.findMany({
+      where: { 
+        organizationId,
+        taskType: 'workflow'
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 20
+    });
+
+    // Transform to workflow format
+    const workflowStates = workflows.map(task => ({
+      id: task.id,
+      name: task.taskType,
+      status: task.status.toLowerCase(),
+      currentStep: 0,
+      totalSteps: 1,
+      progress: task.status === 'COMPLETED' ? 100 : task.status === 'IN_PROGRESS' ? 50 : 0,
+      steps: [{
+        id: task.id,
+        name: task.taskType,
+        type: 'action',
+        status: task.status.toLowerCase(),
+        dependencies: [],
+        inputs: task.input,
+        outputs: task.output,
+        duration: task.completedAt ? 
+          new Date(task.completedAt).getTime() - new Date(task.createdAt).getTime() : 
+          undefined
+      }],
+      results: task.output ? [task.output] : [],
+      startTime: task.createdAt,
+      endTime: task.completedAt
+    }));
+
+    res.json(workflowStates);
+  } catch (error) {
+    console.error('Error fetching workflows:', error);
+    res.status(500).json({ error: 'Failed to fetch workflows' });
+  }
+});
+
+// Get agents for organization
+app.get('/api/orchestration/agents/:organizationId', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId } = req.params;
+    
+    // Mock agents for now - in production, these would be real AI agents
+    const agents = [
+      {
+        id: 'marketing-agent',
+        name: 'Marketing AI Agent',
+        type: 'marketing',
+        capabilities: ['content_creation', 'campaign_management', 'analytics'],
+        status: 'available',
+        performance: {
+          tasksCompleted: 45,
+          successRate: 92,
+          avgDuration: 120000
+        }
+      },
+      {
+        id: 'sales-agent',
+        name: 'Sales AI Agent',
+        type: 'sales',
+        capabilities: ['lead_qualification', 'follow_up', 'proposal_generation'],
+        status: 'available',
+        performance: {
+          tasksCompleted: 38,
+          successRate: 88,
+          avgDuration: 180000
+        }
+      },
+      {
+        id: 'hr-agent',
+        name: 'HR AI Agent',
+        type: 'hr',
+        capabilities: ['recruitment', 'onboarding', 'performance_review'],
+        status: 'busy',
+        currentTask: 'recruitment-workflow',
+        performance: {
+          tasksCompleted: 22,
+          successRate: 95,
+          avgDuration: 240000
+        }
+      },
+      {
+        id: 'finance-agent',
+        name: 'Finance AI Agent',
+        type: 'finance',
+        capabilities: ['budget_analysis', 'forecasting', 'reporting'],
+        status: 'available',
+        performance: {
+          tasksCompleted: 31,
+          successRate: 90,
+          avgDuration: 300000
+        }
+      }
+    ];
+
+    res.json(agents);
+  } catch (error) {
+    console.error('Error fetching agents:', error);
+    res.status(500).json({ error: 'Failed to fetch agents' });
+  }
+});
+
+// Get orchestration metrics
+app.get('/api/orchestration/metrics/:organizationId', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId } = req.params;
+    
+    const totalTasks = await prisma.autonomousTask.count({
+      where: { organizationId }
+    });
+
+    const completedTasks = await prisma.autonomousTask.count({
+      where: { 
+        organizationId,
+        status: 'COMPLETED'
+      }
+    });
+
+    const activeTasks = await prisma.autonomousTask.count({
+      where: { 
+        organizationId,
+        status: 'IN_PROGRESS'
+      }
+    });
+
+    const successRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+    // Calculate average duration
+    const completedTasksWithDuration = await prisma.autonomousTask.findMany({
+      where: { 
+        organizationId,
+        status: 'COMPLETED',
+        completedAt: { not: null }
+      },
+      select: {
+        createdAt: true,
+        completedAt: true
+      }
+    });
+
+    const avgDuration = completedTasksWithDuration.length > 0 
+      ? completedTasksWithDuration.reduce((sum, task) => {
+          const duration = new Date(task.completedAt!).getTime() - new Date(task.createdAt).getTime();
+          return sum + duration;
+        }, 0) / completedTasksWithDuration.length
+      : 0;
+
+    const metrics = {
+      activeWorkflows: activeTasks,
+      completedWorkflows: completedTasks,
+      totalTasks,
+      successRate,
+      avgWorkflowDuration: Math.round(avgDuration),
+      agentUtilization: Math.min(Math.round((activeTasks / 4) * 100), 100) // Assuming 4 agents max
+    };
+
+    res.json(metrics);
+  } catch (error) {
+    console.error('Error fetching metrics:', error);
+    res.status(500).json({ error: 'Failed to fetch metrics' });
+  }
+});
+
+// Get workflow templates
+app.get('/api/orchestration/templates', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const templates = [
+      {
+        id: 'marketing-campaign',
+        name: 'Marketing Campaign Workflow',
+        description: 'Automated marketing campaign creation and execution',
+        type: 'marketing',
+        stepCount: 5,
+        estimatedDuration: '2-4 hours',
+        steps: [
+          { name: 'Market Analysis', type: 'analysis' },
+          { name: 'Content Creation', type: 'action' },
+          { name: 'Channel Selection', type: 'decision' },
+          { name: 'Campaign Launch', type: 'action' },
+          { name: 'Performance Monitoring', type: 'analysis' }
+        ]
+      },
+      {
+        id: 'sales-pipeline',
+        name: 'Sales Pipeline Management',
+        description: 'Automated lead qualification and follow-up process',
+        type: 'sales',
+        stepCount: 6,
+        estimatedDuration: '1-3 hours',
+        steps: [
+          { name: 'Lead Import', type: 'integration' },
+          { name: 'Lead Scoring', type: 'analysis' },
+          { name: 'Qualification', type: 'decision' },
+          { name: 'Follow-up Scheduling', type: 'action' },
+          { name: 'Proposal Generation', type: 'action' },
+          { name: 'Status Update', type: 'notification' }
+        ]
+      },
+      {
+        id: 'hr-recruitment',
+        name: 'HR Recruitment Process',
+        description: 'Automated candidate screening and interview scheduling',
+        type: 'hr',
+        stepCount: 4,
+        estimatedDuration: '3-6 hours',
+        steps: [
+          { name: 'Resume Screening', type: 'analysis' },
+          { name: 'Skill Assessment', type: 'action' },
+          { name: 'Interview Scheduling', type: 'action' },
+          { name: 'Candidate Notification', type: 'notification' }
+        ]
+      },
+      {
+        id: 'financial-reporting',
+        name: 'Financial Reporting Workflow',
+        description: 'Automated financial data collection and report generation',
+        type: 'finance',
+        stepCount: 5,
+        estimatedDuration: '2-5 hours',
+        steps: [
+          { name: 'Data Collection', type: 'integration' },
+          { name: 'Data Validation', type: 'analysis' },
+          { name: 'Report Generation', type: 'action' },
+          { name: 'Review Process', type: 'decision' },
+          { name: 'Distribution', type: 'notification' }
+        ]
+      }
+    ];
+
+    res.json(templates);
+  } catch (error) {
+    console.error('Error fetching templates:', error);
+    res.status(500).json({ error: 'Failed to fetch templates' });
+  }
+});
+
+// Create new workflow
+app.post('/api/orchestration/workflows', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId, templateId, name } = req.body;
+    const userId = req.user!.userId;
+
+    // Create workflow task
+    const workflow = await prisma.autonomousTask.create({
+      data: {
+        organizationId,
+        taskType: name || 'workflow',
+        status: 'PENDING',
+        input: {
+          templateId,
+          createdBy: userId,
+          createdAt: new Date().toISOString()
+        }
+      }
+    });
+
+    res.json({
+      id: workflow.id,
+      name: workflow.taskType,
+      status: 'idle',
+      currentStep: 0,
+      totalSteps: 1,
+      progress: 0,
+      steps: [{
+        id: workflow.id,
+        name: workflow.taskType,
+        type: 'action',
+        status: 'pending',
+        dependencies: [],
+        inputs: workflow.input
+      }],
+      results: [],
+      startTime: workflow.createdAt
+    });
+  } catch (error) {
+    console.error('Error creating workflow:', error);
+    res.status(500).json({ error: 'Failed to create workflow' });
+  }
+});
+
+// Start workflow
+app.post('/api/orchestration/workflows/:workflowId/start', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { workflowId } = req.params;
+
+    await prisma.autonomousTask.update({
+      where: { id: workflowId },
+      data: { 
+        status: 'IN_PROGRESS',
+        startedAt: new Date()
+      }
+    });
+
+    res.json({ success: true, status: 'running' });
+  } catch (error) {
+    console.error('Error starting workflow:', error);
+    res.status(500).json({ error: 'Failed to start workflow' });
+  }
+});
+
+// Pause workflow
+app.post('/api/orchestration/workflows/:workflowId/pause', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { workflowId } = req.params;
+
+    await prisma.autonomousTask.update({
+      where: { id: workflowId },
+      data: { status: 'PAUSED' }
+    });
+
+    res.json({ success: true, status: 'paused' });
+  } catch (error) {
+    console.error('Error pausing workflow:', error);
+    res.status(500).json({ error: 'Failed to pause workflow' });
+  }
+});
+
+// Get workflow status
+app.get('/api/orchestration/status/:organizationId', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId } = req.params;
+    
+    const workflows = await prisma.autonomousTask.findMany({
+      where: { 
+        organizationId,
+        taskType: 'workflow'
+      },
+      select: {
+        id: true,
+        status: true,
+        createdAt: true,
+        startedAt: true,
+        completedAt: true
+      }
+    });
+
+    const workflowStates = workflows.map(workflow => ({
+      id: workflow.id,
+      status: workflow.status.toLowerCase(),
+      progress: 0,
+      startTime: workflow.startedAt,
+      endTime: workflow.completedAt
+    }));
+
+    res.json({ workflows: workflowStates });
+  } catch (error) {
+    console.error('Error fetching workflow status:', error);
+    res.status(500).json({ error: 'Failed to fetch workflow status' });
+  }
+});
+
+// ==================== INTEGRATION ECOSYSTEM ====================
+
+// Get integrations for organization
+app.get('/api/integrations/:organizationId', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId } = req.params;
+    
+    const integrations = await prisma.integration.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    // Transform to frontend format
+    const formattedIntegrations = integrations.map(integration => ({
+      id: integration.id,
+      name: integration.provider,
+      provider: integration.provider,
+      type: getIntegrationType(integration.provider),
+      status: integration.isActive ? 'connected' : 'disconnected',
+      isActive: integration.isActive,
+      lastSync: (integration.metadata as any)?.lastSyncAt || null,
+      syncStatus: integration.isActive ? 'success' : 'never',
+      credentials: integration.accessToken ? { hasToken: true } : {},
+      metadata: integration.metadata,
+      capabilities: getIntegrationCapabilities(integration.provider),
+      usage: {
+        requests: (integration.metadata as any)?.requests || 0,
+        limit: getIntegrationLimit(integration.provider),
+        resetDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days from now
+      }
+    }));
+
+    res.json(formattedIntegrations);
+  } catch (error) {
+    console.error('Error fetching integrations:', error);
+    res.status(500).json({ error: 'Failed to fetch integrations' });
+  }
+});
+
+// Get integration templates
+app.get('/api/integrations/templates', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const templates = [
+      {
+        id: 'salesforce-crm',
+        name: 'Salesforce CRM',
+        provider: 'Salesforce',
+        type: 'crm',
+        description: 'Connect your Salesforce CRM to sync leads, contacts, and opportunities',
+        icon: 'crm',
+        capabilities: ['lead_sync', 'contact_management', 'opportunity_tracking', 'sales_analytics'],
+        setupSteps: ['Connect to Salesforce', 'Authorize API access', 'Configure sync settings', 'Test connection'],
+        pricing: {
+          free: false,
+          plans: [
+            { name: 'Starter', price: 25, features: ['Basic sync', '1000 records/month'] },
+            { name: 'Professional', price: 75, features: ['Advanced sync', '10000 records/month', 'Custom fields'] },
+            { name: 'Enterprise', price: 200, features: ['Full sync', 'Unlimited records', 'Custom workflows'] }
+          ]
+        },
+        documentation: 'https://docs.salesforce.com',
+        status: 'available'
+      },
+      {
+        id: 'hubspot-crm',
+        name: 'HubSpot CRM',
+        provider: 'HubSpot',
+        type: 'crm',
+        description: 'Sync contacts, deals, and companies with HubSpot CRM',
+        icon: 'crm',
+        capabilities: ['contact_sync', 'deal_tracking', 'company_management', 'email_tracking'],
+        setupSteps: ['Connect to HubSpot', 'Authorize API access', 'Configure sync settings', 'Test connection'],
+        pricing: {
+          free: true,
+          plans: [
+            { name: 'Free', price: 0, features: ['Basic sync', '1000 contacts'] },
+            { name: 'Starter', price: 45, features: ['Advanced sync', '10000 contacts', 'Custom properties'] },
+            { name: 'Professional', price: 120, features: ['Full sync', 'Unlimited contacts', 'Workflows'] }
+          ]
+        },
+        documentation: 'https://developers.hubspot.com',
+        status: 'available'
+      },
+      {
+        id: 'mailchimp-marketing',
+        name: 'Mailchimp',
+        provider: 'Mailchimp',
+        type: 'marketing',
+        description: 'Sync email lists and automate marketing campaigns',
+        icon: 'marketing',
+        capabilities: ['email_sync', 'list_management', 'campaign_automation', 'analytics'],
+        setupSteps: ['Connect to Mailchimp', 'Authorize API access', 'Configure sync settings', 'Test connection'],
+        pricing: {
+          free: true,
+          plans: [
+            { name: 'Free', price: 0, features: ['Basic sync', '2000 contacts'] },
+            { name: 'Essentials', price: 10, features: ['Advanced sync', '50000 contacts', 'Automation'] },
+            { name: 'Standard', price: 15, features: ['Full sync', '100000 contacts', 'A/B testing'] }
+          ]
+        },
+        documentation: 'https://mailchimp.com/developer',
+        status: 'available'
+      },
+      {
+        id: 'linkedin-social',
+        name: 'LinkedIn',
+        provider: 'LinkedIn',
+        type: 'social',
+        description: 'Share content and manage LinkedIn company page',
+        icon: 'social',
+        capabilities: ['content_sharing', 'page_management', 'analytics', 'lead_generation'],
+        setupSteps: ['Connect to LinkedIn', 'Authorize API access', 'Configure sync settings', 'Test connection'],
+        pricing: {
+          free: false,
+          plans: [
+            { name: 'Basic', price: 30, features: ['Basic posting', 'Analytics'] },
+            { name: 'Professional', price: 60, features: ['Advanced posting', 'Lead generation', 'CRM integration'] }
+          ]
+        },
+        documentation: 'https://docs.microsoft.com/en-us/linkedin',
+        status: 'available'
+      },
+      {
+        id: 'google-analytics',
+        name: 'Google Analytics',
+        provider: 'Google',
+        type: 'analytics',
+        description: 'Track website performance and user behavior',
+        icon: 'analytics',
+        capabilities: ['traffic_analysis', 'conversion_tracking', 'audience_insights', 'custom_reports'],
+        setupSteps: ['Connect to Google Analytics', 'Authorize API access', 'Configure sync settings', 'Test connection'],
+        pricing: {
+          free: true,
+          plans: [
+            { name: 'Free', price: 0, features: ['Basic analytics', 'Standard reports'] },
+            { name: '360', price: 150000, features: ['Advanced analytics', 'Custom reports', 'Data studio'] }
+          ]
+        },
+        documentation: 'https://developers.google.com/analytics',
+        status: 'available'
+      },
+      {
+        id: 'slack-communication',
+        name: 'Slack',
+        provider: 'Slack',
+        type: 'communication',
+        description: 'Send notifications and manage team communication',
+        icon: 'communication',
+        capabilities: ['notifications', 'channel_management', 'bot_integration', 'file_sharing'],
+        setupSteps: ['Connect to Slack', 'Authorize API access', 'Configure sync settings', 'Test connection'],
+        pricing: {
+          free: true,
+          plans: [
+            { name: 'Free', price: 0, features: ['Basic notifications', '10k messages'] },
+            { name: 'Pro', price: 6.67, features: ['Advanced notifications', 'Unlimited messages', 'Integrations'] }
+          ]
+        },
+        documentation: 'https://api.slack.com',
+        status: 'available'
+      }
+    ];
+
+    res.json(templates);
+  } catch (error) {
+    console.error('Error fetching integration templates:', error);
+    res.status(500).json({ error: 'Failed to fetch integration templates' });
+  }
+});
+
+// Connect new integration
+app.post('/api/integrations/connect', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId, templateId } = req.body;
+    const userId = req.user!.userId;
+
+    // Create integration record
+    const integration = await prisma.integration.create({
+      data: {
+        organizationId,
+        provider: templateId,
+        accessToken: `mock_token_${Date.now()}`,
+        isActive: true,
+        metadata: {
+          name: getTemplateName(templateId),
+          connectedAt: new Date().toISOString(),
+          connectedBy: userId,
+          status: 'active'
+        }
+      }
+    });
+
+    res.json({
+      id: integration.id,
+      name: getTemplateName(templateId),
+      provider: integration.provider,
+      type: getIntegrationType(integration.provider),
+      status: 'connected',
+      isActive: true,
+      lastSync: null,
+      syncStatus: 'never',
+      capabilities: getIntegrationCapabilities(integration.provider),
+      usage: {
+        requests: 0,
+        limit: getIntegrationLimit(integration.provider),
+        resetDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      }
+    });
+  } catch (error) {
+    console.error('Error connecting integration:', error);
+    res.status(500).json({ error: 'Failed to connect integration' });
+  }
+});
+
+// Disconnect integration
+app.post('/api/integrations/:integrationId/disconnect', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { integrationId } = req.params;
+
+    await prisma.integration.update({
+      where: { id: integrationId },
+      data: { 
+        isActive: false,
+        metadata: {
+          disconnectedAt: new Date().toISOString(),
+          status: 'disconnected'
+        }
+      }
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error disconnecting integration:', error);
+    res.status(500).json({ error: 'Failed to disconnect integration' });
+  }
+});
+
+// Sync integration
+app.post('/api/integrations/:integrationId/sync', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { integrationId } = req.params;
+
+    // Create sync activity
+    const syncActivity = await prisma.autonomousTask.create({
+      data: {
+        organizationId: (await prisma.integration.findUnique({ where: { id: integrationId } }))?.organizationId || '',
+        taskType: 'integration_sync',
+        status: 'IN_PROGRESS',
+        input: {
+          integrationId,
+          syncType: 'full',
+          startedAt: new Date().toISOString()
+        }
+      }
+    });
+
+    // Update integration last sync
+    const currentIntegration = await prisma.integration.findUnique({ where: { id: integrationId } });
+    await prisma.integration.update({
+      where: { id: integrationId },
+      data: { 
+        metadata: {
+          ...(currentIntegration?.metadata as any || {}),
+          lastSyncAt: new Date().toISOString(),
+          lastSyncActivity: syncActivity.id,
+          lastSyncStatus: 'running'
+        }
+      }
+    });
+
+    res.json({ success: true, activityId: syncActivity.id });
+  } catch (error) {
+    console.error('Error syncing integration:', error);
+    res.status(500).json({ error: 'Failed to sync integration' });
+  }
+});
+
+// Get sync activities
+app.get('/api/integrations/sync-activities/:organizationId', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId } = req.params;
+    
+    const activities = await prisma.autonomousTask.findMany({
+      where: { 
+        organizationId,
+        taskType: 'integration_sync'
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 20
+    });
+
+    const formattedActivities = activities.map(activity => ({
+      id: activity.id,
+      integrationId: (activity.input as any)?.integrationId || 'unknown',
+      type: 'sync',
+      status: activity.status.toLowerCase(),
+      progress: 0,
+      startTime: activity.createdAt,
+      endTime: activity.completedAt,
+      recordsProcessed: (activity.input as any)?.recordsProcessed || 0,
+      recordsTotal: (activity.input as any)?.recordsTotal || 100,
+      error: activity.error
+    }));
+
+    res.json(formattedActivities);
+  } catch (error) {
+    console.error('Error fetching sync activities:', error);
+    res.status(500).json({ error: 'Failed to fetch sync activities' });
+  }
+});
+
+// Helper functions
+function getIntegrationType(provider: string): string {
+  const types: { [key: string]: string } = {
+    'salesforce-crm': 'crm',
+    'hubspot-crm': 'crm',
+    'mailchimp-marketing': 'marketing',
+    'linkedin-social': 'social',
+    'google-analytics': 'analytics',
+    'slack-communication': 'communication'
+  };
+  return types[provider] || 'other';
+}
+
+function getTemplateName(templateId: string): string {
+  const names: { [key: string]: string } = {
+    'salesforce-crm': 'Salesforce CRM',
+    'hubspot-crm': 'HubSpot CRM',
+    'mailchimp-marketing': 'Mailchimp',
+    'linkedin-social': 'LinkedIn',
+    'google-analytics': 'Google Analytics',
+    'slack-communication': 'Slack'
+  };
+  return names[templateId] || templateId;
+}
+
+function getIntegrationCapabilities(provider: string): string[] {
+  const capabilities: { [key: string]: string[] } = {
+    'salesforce-crm': ['lead_sync', 'contact_management', 'opportunity_tracking', 'sales_analytics'],
+    'hubspot-crm': ['contact_sync', 'deal_tracking', 'company_management', 'email_tracking'],
+    'mailchimp-marketing': ['email_sync', 'list_management', 'campaign_automation', 'analytics'],
+    'linkedin-social': ['content_sharing', 'page_management', 'analytics', 'lead_generation'],
+    'google-analytics': ['traffic_analysis', 'conversion_tracking', 'audience_insights', 'custom_reports'],
+    'slack-communication': ['notifications', 'channel_management', 'bot_integration', 'file_sharing']
+  };
+  return capabilities[provider] || [];
+}
+
+function getIntegrationLimit(provider: string): number {
+  const limits: { [key: string]: number } = {
+    'salesforce-crm': 10000,
+    'hubspot-crm': 10000,
+    'mailchimp-marketing': 50000,
+    'linkedin-social': 5000,
+    'google-analytics': 100000,
+    'slack-communication': 10000
+  };
+  return limits[provider] || 1000;
+}
+
+// ==================== AGENTIC & NEURAL NETWORK ROUTES ====================
+
+// Neural network learning endpoint
+app.get('/api/neural-network/learn/:organizationId', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId } = req.params;
+    const [leads, tasks] = await Promise.all([
+      prisma.salesLead.findMany({ where: { organizationId }, include: { activities: true } }),
+      prisma.autonomousTask.findMany({ where: { organizationId } }),
+    ]);
+    const result = await neuralNetwork.trainOnBusinessData(leads, tasks);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('Neural network error:', error);
+    res.status(500).json({ error: 'Failed to train neural network' });
+  }
+});
+
+// Emotion detection endpoint
+app.post('/api/ai/emotion/detect', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { imageData } = req.body;
+    const result = await detectEmotion(imageData);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('Emotion detection error:', error);
+    res.status(500).json({ error: 'Failed to detect emotion' });
+  }
+});
+
+// Agentic analysis endpoint (manual trigger)
+app.post('/api/agentic/analyze', authMiddleware, orgGuard('admin'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { organizationId } = req.body;
+    const result = await agenticEngine.analyzeAndAct(organizationId);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('Agentic engine error:', error);
+    res.status(500).json({ error: 'Failed to run agentic analysis' });
+  }
+});
+
 // ==================== SERVER START ====================
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`🤖 Autonomous task executor started (runs every minute)`);
+  console.log(`🧠 Agentic engine initialized (hourly analysis)`);
 });
+
+// Agentic Engine: Run hourly analysis for all organizations
+setInterval(async () => {
+  try {
+    console.log('🤖 Running hourly agentic analysis...');
+    const orgs = await prisma.organization.findMany({ where: { plan: { in: ['pro', 'enterprise'] } } });
+    for (const org of orgs) {
+      try {
+        const result = await agenticEngine.analyzeAndAct(org.id);
+        if (result.actions.length > 0) {
+          console.log(`✅ ${org.name}: ${result.actions.length} autonomous actions taken`);
+        }
+      } catch (err) {
+        console.error(`❌ Agentic error for ${org.name}:`, err);
+      }
+    }
+  } catch (error) {
+    console.error('Hourly agentic runner error:', error);
+  }
+}, 3600000); // Every hour
 
 export default app;

@@ -28,6 +28,7 @@ import {
   Plus,
   LogOut
 } from 'lucide-react';
+import { AnimatedContainer, AnimatedCard } from '@/components/ui/Animated';
 
 interface User {
   id: string;
@@ -61,6 +62,7 @@ export default function DashboardPage() {
     inProgress: 0,
   });
   const [mounted, setMounted] = useState(false);
+  const [isNewUser, setIsNewUser] = useState(false);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -75,7 +77,15 @@ export default function DashboardPage() {
       try {
         const userObj = JSON.parse(userData);
         setUser(userObj);
+        
+        // Check if this is a new user (no tasks, no AI config)
         if (userObj.organizationId) {
+          const hasTasks = await checkIfUserHasData(userObj.organizationId);
+          if (!hasTasks) {
+            setIsNewUser(true);
+            router.push('/dashboard/quick-start');
+            return;
+          }
           await fetchTasks(userObj.organizationId);
         }
       } catch (error) {
@@ -88,6 +98,37 @@ export default function DashboardPage() {
 
     checkAuth();
   }, [router]);
+
+  const checkIfUserHasData = async (organizationId: string) => {
+    try {
+      const token = localStorage.getItem('token');
+      
+      // Check for tasks
+      const tasksResponse = await fetch(`http://localhost:5000/api/tasks/${organizationId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (tasksResponse.ok) {
+        const tasks = await tasksResponse.json();
+        if (tasks.length > 0) return true;
+      }
+      
+      // Check for AI config
+      const aiResponse = await fetch(`http://localhost:5000/api/onboarding/ai-ceo/${organizationId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (aiResponse.ok) {
+        const aiConfig = await aiResponse.json();
+        if (aiConfig) return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('Error checking user data:', error);
+      return false;
+    }
+  };
 
   useEffect(() => {
     setMounted(true);
@@ -185,41 +226,43 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-purple-800 to-indigo-900">
-      <Toaster position="top-right" />
+    <AnimatedContainer>
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-purple-800 to-indigo-900">
+        <Toaster position="top-right" />
 
-      {/* Header */}
-      <header className="bg-white/10 backdrop-blur-lg border-b border-white/20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
-            <div className="flex items-center space-x-4">
-              <h1 className="text-2xl font-bold text-white">AI CEO Platform</h1>
-              <nav className="hidden md:flex space-x-6">
-                <a href="/dashboard" className="text-white hover:text-purple-200">Dashboard</a>
-                <a href="/dashboard/tasks" className="text-purple-200 hover:text-white">Tasks</a>
-                <a href="/dashboard/chat" className="text-purple-200 hover:text-white">Chat</a>
-                <a href="/dashboard/analytics" className="text-purple-200 hover:text-white">Analytics</a>
-                <a href="/dashboard/crm" className="text-purple-200 hover:text-white">CRM</a>
-              </nav>
-            </div>
-            <div className="flex items-center space-x-4">
-              <span className="text-white">Welcome, {user?.firstName}</span>
-              <button
-                onClick={handleLogout}
-                className="flex items-center space-x-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>Logout</span>
-              </button>
+        {/* Header */}
+        <header className="bg-white/10 backdrop-blur-lg border-b border-white/20">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-center py-4">
+              <div className="flex items-center space-x-4">
+                <h1 className="text-2xl font-bold text-white">AI CEO Platform</h1>
+                <nav className="hidden md:flex space-x-6">
+                  <a href="/dashboard" className="text-white hover:text-purple-200">Dashboard</a>
+                  <a href="/dashboard/tasks" className="text-purple-200 hover:text-white">Tasks</a>
+                  <a href="/dashboard/chat" className="text-purple-200 hover:text-white">Chat</a>
+                  <a href="/dashboard/analytics" className="text-purple-200 hover:text-white">Analytics</a>
+                  <a href="/dashboard/orchestrator" className="text-purple-200 hover:text-white">Orchestrator</a>
+                  <a href="/dashboard/integrations" className="text-purple-200 hover:text-white">Integrations</a>
+                </nav>
+              </div>
+              <div className="flex items-center space-x-4">
+                <span className="text-white">Welcome, {user?.firstName}</span>
+                <button
+                  onClick={handleLogout}
+                  className="flex items-center space-x-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Logout</span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      </header>
+        </header>
 
-      {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Main Content */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Welcome Section */}
-        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 mb-8 border border-white/20">
+        <AnimatedCard className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 mb-8 border border-white/20">
           <div className="flex items-center justify-between">
             <div>
           <h2 className="text-3xl font-bold text-white mb-2">
@@ -246,14 +289,15 @@ export default function DashboardPage() {
               </button>
             </div>
           </div>
-        </div>
+        </AnimatedCard>
 
         {/* Quick Actions Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <button
             onClick={() => createQuickTask('social_media_post', 'Create engaging social media content about our latest product launch')}
-            className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20 hover:bg-white/15 transition-all text-left group"
+            className="w-full"
           >
+            <AnimatedCard className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20 hover:bg-white/15 transition-all text-left group cursor-pointer">
             <div className="flex items-center justify-between mb-4">
               <div className="p-3 bg-purple-500/20 rounded-lg group-hover:bg-purple-500/30 transition-colors">
                 <Zap className="w-6 h-6 text-purple-300" />
@@ -262,55 +306,62 @@ export default function DashboardPage() {
             </div>
             <h3 className="text-white font-semibold text-lg mb-2">Generate Social Posts</h3>
             <p className="text-purple-200 text-sm">Create engaging content for LinkedIn</p>
+            </AnimatedCard>
           </button>
 
           <button
             onClick={() => createQuickTask('email_campaign', 'Draft a newsletter for our subscribers about Q4 results')}
-            className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20 hover:bg-white/15 transition-all text-left group"
+            className="w-full"
           >
-            <div className="flex items-center justify-between mb-4">
-              <div className="p-3 bg-indigo-500/20 rounded-lg group-hover:bg-indigo-500/30 transition-colors">
-                <MessageSquare className="w-6 h-6 text-indigo-300" />
-              </div>
-              <Plus className="w-4 h-4 text-indigo-300" />
-              </div>
-            <h3 className="text-white font-semibold text-lg mb-2">Email Campaign</h3>
-            <p className="text-purple-200 text-sm">Draft and send newsletters</p>
+            <AnimatedCard className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20 hover:bg-white/15 transition-all text-left group cursor-pointer">
+              <div className="flex items-center justify-between mb-4">
+                <div className="p-3 bg-indigo-500/20 rounded-lg group-hover:bg-indigo-500/30 transition-colors">
+                  <MessageSquare className="w-6 h-6 text-indigo-300" />
+                </div>
+                <Plus className="w-4 h-4 text-indigo-300" />
+                </div>
+              <h3 className="text-white font-semibold text-lg mb-2">Email Campaign</h3>
+              <p className="text-purple-200 text-sm">Draft and send newsletters</p>
+            </AnimatedCard>
           </button>
 
           <button
             onClick={() => createQuickTask('lead_followup', 'Follow up with potential clients from last week')}
-            className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20 hover:bg-white/15 transition-all text-left group"
+            className="w-full"
           >
-            <div className="flex items-center justify-between mb-4">
-              <div className="p-3 bg-green-500/20 rounded-lg group-hover:bg-green-500/30 transition-colors">
-                <Users className="w-6 h-6 text-green-300" />
+            <AnimatedCard className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20 hover:bg-white/15 transition-all text-left group cursor-pointer">
+              <div className="flex items-center justify-between mb-4">
+                <div className="p-3 bg-green-500/20 rounded-lg group-hover:bg-green-500/30 transition-colors">
+                  <Users className="w-6 h-6 text-green-300" />
+              </div>
+                <Plus className="w-4 h-4 text-green-300" />
             </div>
-              <Plus className="w-4 h-4 text-green-300" />
-          </div>
-            <h3 className="text-white font-semibold text-lg mb-2">Follow up Leads</h3>
-            <p className="text-purple-200 text-sm">Personalized follow-up messages</p>
+              <h3 className="text-white font-semibold text-lg mb-2">Follow up Leads</h3>
+              <p className="text-purple-200 text-sm">Personalized follow-up messages</p>
+            </AnimatedCard>
           </button>
 
           <button
             onClick={() => createQuickTask('content_analysis', 'Analyze our recent marketing performance and suggest improvements')}
-            className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20 hover:bg-white/15 transition-all text-left group"
+            className="w-full"
           >
-            <div className="flex items-center justify-between mb-4">
-              <div className="p-3 bg-pink-500/20 rounded-lg group-hover:bg-pink-500/30 transition-colors">
-                <TrendingUp className="w-6 h-6 text-pink-300" />
+            <AnimatedCard className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20 hover:bg-white/15 transition-all text-left group cursor-pointer">
+              <div className="flex items-center justify-between mb-4">
+                <div className="p-3 bg-pink-500/20 rounded-lg group-hover:bg-pink-500/30 transition-colors">
+                  <TrendingUp className="w-6 h-6 text-pink-300" />
+                </div>
+                <Plus className="w-4 h-4 text-pink-300" />
               </div>
-              <Plus className="w-4 h-4 text-pink-300" />
-            </div>
-            <h3 className="text-white font-semibold text-lg mb-2">Analyze Performance</h3>
-            <p className="text-purple-200 text-sm">Get insights and recommendations</p>
+              <h3 className="text-white font-semibold text-lg mb-2">Analyze Performance</h3>
+              <p className="text-purple-200 text-sm">Get insights and recommendations</p>
+            </AnimatedCard>
           </button>
         </div>
 
         {/* Stats and Charts */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
           {/* Task Status Chart */}
-          <div className="lg:col-span-2 bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+          <AnimatedCard className="lg:col-span-2 bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
             <h3 className="text-white font-semibold text-lg mb-4">Task Activity This Week</h3>
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={activityData}>
@@ -327,10 +378,10 @@ export default function DashboardPage() {
                 <Bar dataKey="tasks" fill="#8B5CF6" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
-          </div>
+          </AnimatedCard>
 
           {/* Task Status Pie Chart */}
-          <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+          <AnimatedCard className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
             <h3 className="text-white font-semibold text-lg mb-4">Task Status</h3>
             <ResponsiveContainer width="100%" height={200}>
               <PieChart>
@@ -367,11 +418,11 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
-          </div>
+          </AnimatedCard>
         </div>
 
         {/* Recent Tasks */}
-        <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20 mb-8">
+        <AnimatedCard className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20 mb-8">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-white font-semibold text-lg">Recent Tasks</h3>
             <button
@@ -436,11 +487,11 @@ export default function DashboardPage() {
               ))}
             </div>
           )}
-        </div>
+        </AnimatedCard>
 
         {/* Status Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 backdrop-blur-lg rounded-xl p-6 border border-purple-400/30">
+          <AnimatedCard className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 backdrop-blur-lg rounded-xl p-6 border border-purple-400/30">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-purple-200 text-sm mb-1">Total Tasks</p>
@@ -450,9 +501,9 @@ export default function DashboardPage() {
                 <Play className="w-8 h-8 text-purple-200" />
               </div>
             </div>
-          </div>
+          </AnimatedCard>
 
-          <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 backdrop-blur-lg rounded-xl p-6 border border-green-400/30">
+          <AnimatedCard className="bg-gradient-to-br from-green-500/20 to-green-600/20 backdrop-blur-lg rounded-xl p-6 border border-green-400/30">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-green-200 text-sm mb-1">Completed</p>
@@ -462,9 +513,9 @@ export default function DashboardPage() {
                 <CheckCircle className="w-8 h-8 text-green-200" />
               </div>
             </div>
-          </div>
+          </AnimatedCard>
 
-          <div className="bg-gradient-to-br from-yellow-500/20 to-yellow-600/20 backdrop-blur-lg rounded-xl p-6 border border-yellow-400/30">
+          <AnimatedCard className="bg-gradient-to-br from-yellow-500/20 to-yellow-600/20 backdrop-blur-lg rounded-xl p-6 border border-yellow-400/30">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-yellow-200 text-sm mb-1">In Progress</p>
@@ -472,11 +523,11 @@ export default function DashboardPage() {
               </div>
               <div className="p-3 bg-yellow-500/30 rounded-lg">
                 <Clock className="w-8 h-8 text-yellow-200" />
+              </div>
             </div>
-          </div>
-        </div>
+          </AnimatedCard>
 
-          <div className="bg-gradient-to-br from-red-500/20 to-red-600/20 backdrop-blur-lg rounded-xl p-6 border border-red-400/30">
+          <AnimatedCard className="bg-gradient-to-br from-red-500/20 to-red-600/20 backdrop-blur-lg rounded-xl p-6 border border-red-400/30">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-red-200 text-sm mb-1">Failed</p>
@@ -486,9 +537,10 @@ export default function DashboardPage() {
                 <XCircle className="w-8 h-8 text-red-200" />
               </div>
             </div>
-              </div>
-            </div>
-          </div>
-    </div>
+          </AnimatedCard>
+        </div>
+        </div>
+      </div>
+    </AnimatedContainer>
   );
 }

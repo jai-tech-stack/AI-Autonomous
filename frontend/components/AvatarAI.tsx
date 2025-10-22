@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Mic, MicOff, Volume2, VolumeX, Settings, Zap, Brain, MessageCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import EmotionDetection from './EmotionDetection';
+import { AnimatedContainer, AnimatedCard, FadeIn } from './ui/Animated';
 
 interface AvatarAIProps {
   organizationId: string;
@@ -281,9 +282,11 @@ export default function AvatarAI({ organizationId, aiConfig, onMessage, onVoiceR
   };
 
   return (
-    <div className="flex flex-col items-center space-y-6 p-6">
-      {/* Avatar Display */}
-      <div className="relative">
+    <AnimatedContainer>
+      <div className="flex flex-col items-center space-y-6 p-6">
+        {/* Avatar Display */}
+        <FadeIn delay={0.2}>
+          <div className="relative">
         <div className="w-64 h-64 rounded-full overflow-hidden border-4 border-purple-500/30 shadow-2xl">
           {avatarVideo ? (
             <video
@@ -318,10 +321,12 @@ export default function AvatarAI({ organizationId, aiConfig, onMessage, onVoiceR
             </div>
           )}
         </div>
-      </div>
+          </div>
+        </FadeIn>
 
-      {/* AI CEO Info */}
-      <div className="text-center">
+        {/* AI CEO Info */}
+        <FadeIn delay={0.4}>
+          <div className="text-center">
         <h3 className="text-2xl font-bold text-white mb-2">
           {aiConfig?.ceoName || 'AI CEO'}
         </h3>
@@ -332,10 +337,12 @@ export default function AvatarAI({ organizationId, aiConfig, onMessage, onVoiceR
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`}></div>
           <span>{isConnected ? 'Connected' : 'Connecting...'}</span>
         </div>
-      </div>
+          </div>
+        </FadeIn>
 
-      {/* Voice Controls */}
-      <div className="flex space-x-4">
+        {/* Voice Controls */}
+        <FadeIn delay={0.6}>
+          <div className="flex space-x-4">
         <button
           onClick={avatarState.isListening ? stopListening : startListening}
           disabled={avatarState.isProcessing}
@@ -361,10 +368,12 @@ export default function AvatarAI({ organizationId, aiConfig, onMessage, onVoiceR
           <VolumeX className="w-5 h-5" />
           <span>Stop Speaking</span>
         </button>
-      </div>
+          </div>
+        </FadeIn>
 
-      {/* Text Input */}
-      <form onSubmit={handleTextSubmit} className="w-full max-w-md">
+        {/* Text Input */}
+        <FadeIn delay={0.8}>
+          <form onSubmit={handleTextSubmit} className="w-full max-w-md">
         <div className="flex space-x-2">
           <input
             type="text"
@@ -383,10 +392,12 @@ export default function AvatarAI({ organizationId, aiConfig, onMessage, onVoiceR
             <span>Send</span>
           </button>
         </div>
-      </form>
+          </form>
+        </FadeIn>
 
-      {/* Personality Traits */}
-      {aiConfig?.personality && (
+        {/* Personality Traits */}
+        <FadeIn delay={1.0}>
+          {aiConfig?.personality && (
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div className="bg-white/5 rounded-lg p-3">
             <div className="text-purple-300 mb-1">Personality</div>
@@ -404,10 +415,12 @@ export default function AvatarAI({ organizationId, aiConfig, onMessage, onVoiceR
             <div className="text-white capitalize">{avatarState.currentEmotion}</div>
           </div>
         </div>
-      )}
+          )}
+        </FadeIn>
 
-      {/* Emotion Detection */}
-      <div className="mt-6">
+        {/* Emotion Detection */}
+        <FadeIn delay={1.2}>
+          <div className="mt-6">
         <div className="flex items-center justify-between mb-4">
           <h4 className="text-lg font-semibold text-white">Emotion Detection</h4>
           <button
@@ -427,7 +440,9 @@ export default function AvatarAI({ organizationId, aiConfig, onMessage, onVoiceR
           onSentimentChange={handleSentimentChange}
           isActive={emotionDetectionActive}
         />
+          </div>
+        </FadeIn>
       </div>
-    </div>
+    </AnimatedContainer>
   );
 }
